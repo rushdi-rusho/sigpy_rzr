@@ -1916,3 +1916,250 @@ class Embed(Linop):
 
     def _adjoint_linop(self):
         return Slice(self.oshape, self.idx)
+        
+class ConvolveData_MC(Linop):
+    r"""Convolution operator for data arrays.
+
+    Args:
+        data_shape (tuple of ints): data array shape:
+            :math:`[\ldots, m_1, \ldots, m_D]` if multi_channel is False,
+            :math:`[\ldots, c_i, m_1, \ldots, m_D]` otherwise.
+        filt (array): filter array of shape:
+            :math:`[n_1, \ldots, n_D]` if multi_channel is False
+            :math:`[c_o, c_i, n_1, \ldots, n_D]` otherwise.
+        mode (str): {'full', 'valid'}.
+        strides (None or tuple of ints): convolution strides of length D.
+        multi_channel (bool): specify if input/output has multiple channels.
+
+    """
+    def __init__(
+        self, data_shape, filt, mode="full", strides=None, multi_channel=False
+    ):
+        self.filt = filt
+        self.mode = mode
+        self.strides = strides
+        self.multi_channel = multi_channel
+
+        D, b, B, m, n, s, c_i, c_o, p = conv._get_convolve_params(
+            data_shape, filt.shape, mode, strides, multi_channel
+        )
+
+        if multi_channel:
+            output_shape = b + (c_o,) + p
+        else:
+            output_shape = b + p
+
+        output_shape = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
+        self.holder = output_shape
+        super().__init__(output_shape, data_shape)
+
+
+    def _apply(self, input):
+        device = backend.get_device(input)
+        filt = backend.to_device(self.filt, device)
+        holder = np.empty(self.holder, dtype=input.dtype)
+        #print('self.ishape=',self.ishape)
+        with device:
+            # batch loop
+            for batch in range(input.shape[0]):
+
+                for nncoil in range(filt.shape[0]):
+                    holder[batch,nncoil,...] = conv.convolve(input[batch],filt[nncoil], mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+            
+            return holder
+
+    def _adjoint_linop(self):
+        return ConvolveDataAdjoint_MC(
+            self.ishape,
+            self.filt,
+            mode=self.mode,
+            strides=self.strides,
+            multi_channel=self.multi_channel,
+        )
+
+class ConvolveDataAdjoint_MC(Linop):
+    r"""Adjoint convolution operator for data arrays.
+
+    Args:
+        data_shape (tuple of ints): data array shape:
+            :math:`[\ldots, m_1, \ldots, m_D]` if multi_channel is False,
+            :math:`[\ldots, c_i, m_1, \ldots, m_D]` otherwise.
+        filt (array): filter array of shape:
+            :math:`[n_1, \ldots, n_D]` if multi_channel is False
+            :math:`[c_o, c_i, n_1, \ldots, n_D]` otherwise.
+        mode (str): {'full', 'valid'}.
+        strides (None or tuple of ints): convolution strides of length D.
+        multi_channel (bool): specify if input/output has multiple channels.
+
+    """
+
+
+    def __init__(
+        self, data_shape, filt, mode="full", strides=None, multi_channel=False
+    ):
+        self.filt = filt
+        self.mode = mode
+        self.strides = strides
+        self.multi_channel = multi_channel
+        
+        D, b, B, m, n, s, c_i, c_o, p = conv._get_convolve_params(
+            data_shape, filt.shape, mode, strides, multi_channel
+        )
+
+        if multi_channel:
+            output_shape = b + (c_o,) + p
+        else:
+            output_shape = b + p
+        
+        output_shape = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
+        self.holder2 = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
+        super().__init__(data_shape, output_shape)
+
+
+    def _apply(self, input):
+        device = backend.get_device(input)
+        filt = backend.to_device(self.filt, device)
+        holder2 = np.empty(self.holder2, dtype=input.dtype)
+        self.oshapeMod = (self.oshape[1],self.oshape[2])
+        with device:
+            # batch loop
+            for batch in range(input.shape[0]):
+
+                for nncoil in range(filt.shape[0]):
+                    holder2[batch,nncoil,...] = conv.convolve_data_adjoint(np.squeeze(input[batch,nncoil,...]),filt[nncoil],self.oshapeMod, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+            holder2 = np.mean(holder2, axis = 1).squeeze()
+            
+            return holder2
+
+            
+
+    def _adjoint_linop(self):
+        return ConvolveData_MC(
+            self.oshape,
+            self.filt,
+            mode=self.mode,
+            strides=self.strides,
+            multi_channel=self.multi_channel,
+        )
+
+class Interpolate_MC(Linop):
+    """Interpolation linear operator.
+
+    Args:
+        ishape (tuple of ints): Input shape = batch_shape + grd_shape
+        coord (array): Coordinates, values from - nx / 2 to nx / 2 - 1.
+                ndim can only be 1, 2 or 3, of shape pts_shape + [ndim]
+        width (float): Width of interp. kernel in grid size.
+        kernel (str): Interpolation kernel, {'spline', 'kaiser_bessel'}.
+        param (float): Kernel parameter.
+
+    See Also:
+        :func:`sigpy.interpolate`
+
+    """
+
+    def __init__(self, ishape, coord, FIR_shape, kernel="spline", width=2, param=1):
+        ndim = coord.shape[-1]
+        
+        to_sub1 = FIR_shape[1] -1
+        to_sub2 = FIR_shape[2] -1
+        
+        oshape = list(ishape[:-ndim]) + list(coord.shape[:-1])
+        
+        self.Nxx = ishape[2]-to_sub1
+        self.Nyy = ishape[3]-to_sub2
+        self.coord = coord
+        self.width = width
+        self.kernel = kernel
+        self.param = param
+        self.FIR_shape = FIR_shape
+
+        super().__init__(oshape, ishape)
+
+
+    def _apply(self, input):
+        input = input[:,:,0:self.Nxx,0:self.Nyy]
+        input = np.fft.fftshift(input,axes = (2,3))
+        device = backend.get_device(input)
+        with device:
+            coord = backend.to_device(self.coord, device)
+            return interp.interpolate(
+                input,
+                coord,
+                kernel=self.kernel,
+                width=self.width,
+                param=self.param,
+            )
+
+    def _adjoint_linop(self):
+        return Gridding_MC(
+            self.ishape,
+            self.coord,
+            self.FIR_shape,
+            kernel=self.kernel,
+            width=self.width,
+            param=self.param,
+        )
+
+
+
+class Gridding_MC(Linop):
+    """Gridding linear operator.
+
+    Args:
+        oshape (tuple of ints): Output shape = batch_shape + pts_shape
+        ishape (tuple of ints): Input shape = batch_shape + grd_shape
+        coord (array): Coordinates, values from - nx / 2 to nx / 2 - 1.
+                ndim can only be 1, 2 or 3. of shape pts_shape + [ndim]
+        width (float): Width of interp. kernel in grid size.
+        kernel (str): Interpolation kernel, {'spline', 'kaiser_bessel'}.
+        param (float): Kernel parameter.
+
+    See Also:
+        :func:`sigpy.gridding`
+
+    """
+
+    def __init__(self, oshape, coord, FIR_shape, kernel="spline", width=2, param=1):
+        ndim = coord.shape[-1]
+        ishape = list(oshape[:-ndim]) + list(coord.shape[:-1])
+        to_sub1 = FIR_shape[1] -1
+        to_sub2 = FIR_shape[2] -1
+        self.coord = coord
+        self.kernel = kernel
+        self.width = width
+        self.param = param
+        self.oshape_actual = (oshape[0],oshape[1], oshape[2]-to_sub1, oshape[3]-to_sub2)
+        self.Nxx = oshape[2]-to_sub1
+        self.Nyy = oshape[3]-to_sub2
+        self.FIR_shape = FIR_shape
+        super().__init__(oshape, ishape)
+
+
+    def _apply(self, input):
+        device = backend.get_device(input)
+        with device:
+            coord = backend.to_device(self.coord, device)
+            grid_res = interp.gridding(
+                input,
+                coord,
+                self.oshape_actual,
+                kernel=self.kernel,
+                width=self.width,
+                param=self.param,
+            )
+            zero_padded_interp_res = np.zeros(self.oshape, dtype=input.dtype)
+       
+            zero_padded_interp_res[:,:,0:self.Nxx,0:self.Nyy] = np.fft.fftshift(grid_res,axes = (2,3))
+
+            return zero_padded_interp_res
+
+    def _adjoint_linop(self):
+        return Interpolate_MC(
+            self.oshape,
+            self.coord,
+            self.FIR_shape,
+            kernel=self.kernel,
+            width=self.width,
+            param=self.param,
+        )
