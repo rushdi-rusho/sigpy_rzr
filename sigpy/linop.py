@@ -2026,7 +2026,8 @@ class ConvolveDataAdjoint_MC(Linop):
             for batch in range(input.shape[0]):
 
                 for nncoil in range(filt.shape[0]):
-                    holder2[batch,nncoil,...] = conv.convolve_data_adjoint(np.squeeze(input[batch,nncoil,...]),filt[nncoil],self.oshapeMod, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+                    filt_flip = np.flip(np.conjugate(np.squeeze(filt[nncoil])), axis =(0,1))
+                    holder2[batch,nncoil,...] = conv.convolve_data_adjoint(np.squeeze(input[batch,nncoil,...]),filt_flip,self.oshapeMod, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
             holder2 = np.mean(holder2, axis = 1).squeeze()
             
             return holder2
