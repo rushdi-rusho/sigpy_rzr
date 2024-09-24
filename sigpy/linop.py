@@ -1997,6 +1997,13 @@ class ConvolveDataAdjoint_MC(Linop):
     def __init__(
         self, data_shape, filt, mode="full", strides=None, multi_channel=False
     ):
+            
+        self.Nxx = data_shape[1]
+        self.Nyy = data_shape[2]
+
+        self.to_sub_x = filt.shape[1] -1
+        self.to_sub_y = filt.shape[2] -1
+               
         self.filt = filt
         self.mode = mode
         self.strides = strides
@@ -2010,29 +2017,30 @@ class ConvolveDataAdjoint_MC(Linop):
             output_shape = b + (c_o,) + p
         else:
             output_shape = b + p
-        
+                   
         output_shape = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
-        self.holder2 = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
+        self.os_mod = output_shape
         super().__init__(data_shape, output_shape)
 
-
     def _apply(self, input):
+        input = input[:,:,0:self.Nxx,0:self.Nyy]
         device = backend.get_device(input)
         filt = backend.to_device(self.filt, device)
-        holder2 = np.empty(self.holder2, dtype=input.dtype)
-        self.oshapeMod = (self.oshape[1],self.oshape[2])
+        holder2 = np.empty(self.os_mod, dtype=input.dtype)
+                
         with device:
             # batch loop
             for batch in range(input.shape[0]):
 
                 for nncoil in range(filt.shape[0]):
                     filt_flip = np.flip(np.conjugate(np.squeeze(filt[nncoil])), axis =(0,1))
-                    holder2[batch,nncoil,...] = conv.convolve_data_adjoint(np.squeeze(input[batch,nncoil,...]),filt_flip,self.oshapeMod, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+                   
+                    holder2[batch,nncoil,...] = conv.convolve(np.squeeze(input[batch,nncoil,...]),filt_flip, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+                    
             holder2 = np.mean(holder2, axis = 1).squeeze()
+            holder2 = holder2[:,self.to_sub_x:self.os_mod[2],self.to_sub_y:self.os_mod[3]]
             
-            return holder2
-
-            
+            return holder2         
 
     def _adjoint_linop(self):
         return ConvolveData_MC(
