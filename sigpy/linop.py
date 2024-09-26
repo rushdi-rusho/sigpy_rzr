@@ -5,6 +5,7 @@ such as FFT, NUFFT, and wavelet, and array manipulation operators,
 such as reshape, transpose, and resize.
 """
 import numpy as np
+import sigpy as sp
 
 from sigpy import backend, block, conv, fourier, interp, util, wavelet
 
@@ -1941,7 +1942,7 @@ class ConvolveData_MC(Linop):
         self.multi_channel = multi_channel
 
         D, b, B, m, n, s, c_i, c_o, p = conv._get_convolve_params(
-            data_shape, filt.shape, mode, strides, multi_channel
+            data_shape, (filt.shape[1],filt.shape[2]), mode, strides, multi_channel
         )
 
         if multi_channel:
@@ -1949,8 +1950,9 @@ class ConvolveData_MC(Linop):
         else:
             output_shape = b + p
 
-        output_shape = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
-        self.holder = output_shape
+        self.holder = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
+        output_shape = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
+        self.crop_sp1 = output_shape
         super().__init__(output_shape, data_shape)
 
 
@@ -1958,14 +1960,14 @@ class ConvolveData_MC(Linop):
         device = backend.get_device(input)
         filt = backend.to_device(self.filt, device)
         holder = np.empty(self.holder, dtype=input.dtype)
-        #print('self.ishape=',self.ishape)
+        
         with device:
             # batch loop
             for batch in range(input.shape[0]):
 
                 for nncoil in range(filt.shape[0]):
                     holder[batch,nncoil,...] = conv.convolve(input[batch],filt[nncoil], mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
-            
+            holder = sp.resize(holder,self.crop_sp1)
             return holder
 
     def _adjoint_linop(self):
@@ -2010,20 +2012,22 @@ class ConvolveDataAdjoint_MC(Linop):
         self.multi_channel = multi_channel
         
         D, b, B, m, n, s, c_i, c_o, p = conv._get_convolve_params(
-            data_shape, filt.shape, mode, strides, multi_channel
+            data_shape, (filt.shape[1],filt.shape[2]), mode, strides, multi_channel
         )
 
         if multi_channel:
             output_shape = b + (c_o,) + p
         else:
             output_shape = b + p
-                   
-        output_shape = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
-        self.os_mod = output_shape
+        
+        
+        self.os_mod = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
+        output_shape = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
+        self.crop_sp = output_shape
         super().__init__(data_shape, output_shape)
 
     def _apply(self, input):
-        input = input[:,:,0:self.Nxx,0:self.Nyy]
+        
         device = backend.get_device(input)
         filt = backend.to_device(self.filt, device)
         holder2 = np.empty(self.os_mod, dtype=input.dtype)
@@ -2033,12 +2037,13 @@ class ConvolveDataAdjoint_MC(Linop):
             for batch in range(input.shape[0]):
 
                 for nncoil in range(filt.shape[0]):
-                    filt_flip = np.flip(np.conjugate(np.squeeze(filt[nncoil])), axis =(0,1))
+                    filt_flip = np.flip(np.conjugate(np.squeeze(filt[nncoil,...])), axis =(0,1))
                    
                     holder2[batch,nncoil,...] = conv.convolve(np.squeeze(input[batch,nncoil,...]),filt_flip, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
                     
+            holder2 = sp.resize(holder2, self.crop_sp)
             holder2 = np.mean(holder2, axis = 1).squeeze()
-            holder2 = holder2[:,self.to_sub_x:self.os_mod[2],self.to_sub_y:self.os_mod[3]]
+            
             
             return holder2         
 
