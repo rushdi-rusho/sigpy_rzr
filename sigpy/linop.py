@@ -2072,28 +2072,22 @@ class Interpolate_MC(Linop):
 
     """
 
-    def __init__(self, ishape, coord, FIR_shape, kernel="spline", width=2, param=1):
+
+    def __init__(self, ishape, coord, kernel="spline", width=2, param=1):
         ndim = coord.shape[-1]
-        
-        to_sub1 = FIR_shape[1] -1
-        to_sub2 = FIR_shape[2] -1
-        
         oshape = list(ishape[:-ndim]) + list(coord.shape[:-1])
-        
-        self.Nxx = ishape[2]-to_sub1
-        self.Nyy = ishape[3]-to_sub2
+
         self.coord = coord
         self.width = width
         self.kernel = kernel
         self.param = param
-        self.FIR_shape = FIR_shape
 
         super().__init__(oshape, ishape)
 
 
     def _apply(self, input):
-        input = input[:,:,0:self.Nxx,0:self.Nyy]
         input = np.fft.fftshift(input,axes = (2,3))
+        
         device = backend.get_device(input)
         with device:
             coord = backend.to_device(self.coord, device)
@@ -2109,11 +2103,11 @@ class Interpolate_MC(Linop):
         return Gridding_MC(
             self.ishape,
             self.coord,
-            self.FIR_shape,
             kernel=self.kernel,
             width=self.width,
             param=self.param,
         )
+
 
 
 
@@ -2134,19 +2128,16 @@ class Gridding_MC(Linop):
 
     """
 
-    def __init__(self, oshape, coord, FIR_shape, kernel="spline", width=2, param=1):
+
+    def __init__(self, oshape, coord, kernel="spline", width=2, param=1):
         ndim = coord.shape[-1]
         ishape = list(oshape[:-ndim]) + list(coord.shape[:-1])
-        to_sub1 = FIR_shape[1] -1
-        to_sub2 = FIR_shape[2] -1
+
         self.coord = coord
         self.kernel = kernel
         self.width = width
         self.param = param
-        self.oshape_actual = (oshape[0],oshape[1], oshape[2]-to_sub1, oshape[3]-to_sub2)
-        self.Nxx = oshape[2]-to_sub1
-        self.Nyy = oshape[3]-to_sub2
-        self.FIR_shape = FIR_shape
+
         super().__init__(oshape, ishape)
 
 
@@ -2154,26 +2145,95 @@ class Gridding_MC(Linop):
         device = backend.get_device(input)
         with device:
             coord = backend.to_device(self.coord, device)
-            grid_res = interp.gridding(
+            holder = interp.gridding(
                 input,
                 coord,
-                self.oshape_actual,
+                self.oshape,
                 kernel=self.kernel,
                 width=self.width,
                 param=self.param,
             )
-            zero_padded_interp_res = np.zeros(self.oshape, dtype=input.dtype)
-       
-            zero_padded_interp_res[:,:,0:self.Nxx,0:self.Nyy] = np.fft.fftshift(grid_res,axes = (2,3))
-
-            return zero_padded_interp_res
+            return np.fft.ifftshift(holder,axes = (2,3))
 
     def _adjoint_linop(self):
         return Interpolate_MC(
             self.oshape,
             self.coord,
-            self.FIR_shape,
             kernel=self.kernel,
             width=self.width,
             param=self.param,
+        )
+
+
+class Image_MC(Linop):
+
+    def __init__(
+        self, data_shape, filt
+    ):
+        self.filt = filt
+        
+        output_shape = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
+        self.crop_sp = output_shape
+        super().__init__(output_shape, data_shape)
+
+
+    def _apply(self, input):
+        device = backend.get_device(input)
+        filt = backend.to_device(self.filt, device)
+        holder = np.empty(self.crop_sp, dtype=input.dtype)
+        
+        with device:
+            # batch loop
+            for batch in range(input.shape[0]):
+
+                for nncoil in range(filt.shape[0]):
+                    holder[batch,nncoil,...] = input[batch,...]*filt[nncoil,...]
+            
+            return holder
+
+    def _adjoint_linop(self):
+        return Image_Adj_MC(
+            self.ishape,
+            self.filt,
+
+        )
+
+class Image_Adj_MC(Linop):
+
+
+
+    def __init__(
+        self, data_shape, filt
+    ):
+        self.filt = filt
+        output_shape = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
+        self.crop_sp = output_shape
+        super().__init__(data_shape, output_shape)
+
+    def _apply(self, input):
+        
+        device = backend.get_device(input)
+        filt = backend.to_device(self.filt, device)
+        holder2 = np.empty(self.crop_sp, dtype=input.dtype)
+                
+        with device:
+            # batch loop
+            for batch in range(input.shape[0]):
+
+                for nncoil in range(filt.shape[0]):
+                    filt_conj = np.conjugate(np.squeeze(filt[nncoil,...]))
+                   
+                    holder2[batch,nncoil,...] = np.squeeze(input[batch,nncoil,...])*filt_conj
+                    
+            
+            holder2 = np.mean(holder2, axis = 1).squeeze()
+            
+            
+            return holder2         
+
+    def _adjoint_linop(self):
+        return Image_MC(
+            self.oshape,
+            self.filt,
+
         )
