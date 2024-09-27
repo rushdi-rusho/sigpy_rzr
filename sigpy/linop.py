@@ -1999,13 +1999,7 @@ class ConvolveDataAdjoint_MC(Linop):
     def __init__(
         self, data_shape, filt, mode="full", strides=None, multi_channel=False
     ):
-            
-        self.Nxx = data_shape[1]
-        self.Nyy = data_shape[2]
-
-        self.to_sub_x = filt.shape[1] -1
-        self.to_sub_y = filt.shape[2] -1
-               
+                        
         self.filt = filt
         self.mode = mode
         self.strides = strides
