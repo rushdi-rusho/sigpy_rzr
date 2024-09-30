@@ -1934,12 +1934,13 @@ class ConvolveData_MC(Linop):
 
     """
     def __init__(
-        self, data_shape, filt, mode="full", strides=None, multi_channel=False
+        self, data_shape, filt, mode="full", strides=None, multi_channel=False,masking = False,
     ):
         self.filt = filt
         self.mode = mode
         self.strides = strides
         self.multi_channel = multi_channel
+        self.masking = masking
 
         D, b, B, m, n, s, c_i, c_o, p = conv._get_convolve_params(
             data_shape, (filt.shape[1],filt.shape[2]), mode, strides, multi_channel
@@ -1977,6 +1978,7 @@ class ConvolveData_MC(Linop):
             mode=self.mode,
             strides=self.strides,
             multi_channel=self.multi_channel,
+            masking= self.masking
         )
 
 class ConvolveDataAdjoint_MC(Linop):
@@ -1997,10 +1999,10 @@ class ConvolveDataAdjoint_MC(Linop):
 
 
     def __init__(
-        self, data_shape, filt, mode="full", strides=None, multi_channel=False
+        self, data_shape, filt, mode="full", strides=None, multi_channel=False, masking= False,
     ):
             
-               
+        self.masking = masking      
         self.filt = filt
         self.mode = mode
         self.strides = strides
@@ -2037,8 +2039,11 @@ class ConvolveDataAdjoint_MC(Linop):
                    
                     res_t = conv.convolve(np.squeeze(input[batch,nncoil,...]),filt_flip, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
                     res_t = sp.resize(res_t, (self.crop_sp[2],self.crop_sp[3]))
-                    holder2[batch,nncoil,...] = np.where(mask_to[batch,nncoil,...],res_t, 0)
-                    
+                    if self.masking:
+                        holder2[batch,nncoil,...] = np.where(mask_to[batch,nncoil,...],res_t, 0)
+                    else:
+                        holder2[batch,nncoil,...] = res_t
+           
             holder2 = np.mean(holder2, axis = 1).squeeze()
             
             return holder2         
@@ -2184,7 +2189,8 @@ class Image_MC(Linop):
 
                 for nncoil in range(filt.shape[0]):
                     holder[batch,nncoil,...] = input[batch,...]*filt[nncoil,...]
-            
+
+            holder = sp.fft(holder,axes=(2,3))
             return holder
 
     def _adjoint_linop(self):
@@ -2207,7 +2213,7 @@ class Image_Adj_MC(Linop):
         super().__init__(data_shape, output_shape)
 
     def _apply(self, input):
-        
+        input = sp.ifft(input,axes=(2,3))
         device = backend.get_device(input)
         filt = backend.to_device(self.filt, device)
         holder2 = np.empty(self.crop_sp, dtype=input.dtype)
