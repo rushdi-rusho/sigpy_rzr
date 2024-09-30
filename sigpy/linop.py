@@ -1999,7 +1999,8 @@ class ConvolveDataAdjoint_MC(Linop):
     def __init__(
         self, data_shape, filt, mode="full", strides=None, multi_channel=False
     ):
-                        
+            
+               
         self.filt = filt
         self.mode = mode
         self.strides = strides
@@ -2015,16 +2016,17 @@ class ConvolveDataAdjoint_MC(Linop):
             output_shape = b + p
         
         
-        self.os_mod = (data_shape[0],filt.shape[0], output_shape[1],output_shape[2])
+        
         output_shape = (data_shape[0],filt.shape[0], data_shape[1],data_shape[2])
         self.crop_sp = output_shape
         super().__init__(data_shape, output_shape)
 
     def _apply(self, input):
-        
+        mask_to = input != 0
         device = backend.get_device(input)
         filt = backend.to_device(self.filt, device)
-        holder2 = np.empty(self.os_mod, dtype=input.dtype)
+        mask_to = backend.to_device(mask_to, device)
+        holder2 = np.empty(self.crop_sp, dtype=input.dtype)
                 
         with device:
             # batch loop
@@ -2033,11 +2035,11 @@ class ConvolveDataAdjoint_MC(Linop):
                 for nncoil in range(filt.shape[0]):
                     filt_flip = np.flip(np.conjugate(np.squeeze(filt[nncoil,...])), axis =(0,1))
                    
-                    holder2[batch,nncoil,...] = conv.convolve(np.squeeze(input[batch,nncoil,...]),filt_flip, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+                    res_t = conv.convolve(np.squeeze(input[batch,nncoil,...]),filt_flip, mode=self.mode, strides=self.strides, multi_channel=self.multi_channel,)
+                    res_t = sp.resize(res_t, (self.crop_sp[2],self.crop_sp[3]))
+                    holder2[batch,nncoil,...] = np.where(mask_to[batch,nncoil,...],res_t, 0)
                     
-            holder2 = sp.resize(holder2, self.crop_sp)
             holder2 = np.mean(holder2, axis = 1).squeeze()
-            
             
             return holder2         
 
