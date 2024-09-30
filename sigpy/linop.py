@@ -2233,3 +2233,122 @@ class Image_Adj_MC(Linop):
             self.filt,
 
         )
+class Interpolate_MC_2(Linop):
+    """Interpolation linear operator.
+
+    Args:
+        ishape (tuple of ints): Input shape = batch_shape + grd_shape
+        coord (array): Coordinates, values from - nx / 2 to nx / 2 - 1.
+                ndim can only be 1, 2 or 3, of shape pts_shape + [ndim]
+        width (float): Width of interp. kernel in grid size.
+        kernel (str): Interpolation kernel, {'spline', 'kaiser_bessel'}.
+        param (float): Kernel parameter.
+
+    See Also:
+        :func:`sigpy.interpolate`
+
+    """
+
+
+    def __init__(self, ishape, coord, kernel="spline", width=2, param=1):
+        ndim = coord.shape[-1]
+        oshape = list(ishape[:-ndim]) + list(coord.shape[:-1])
+        self.hld = oshape
+        self.coord = coord
+        self.width = width
+        self.kernel = kernel
+        self.param = param
+
+        super().__init__(oshape, ishape)
+
+
+    def _apply(self, input):
+        input = np.fft.fftshift(input,axes = (2,3))
+        
+        device = backend.get_device(input)
+        holder2 = np.empty(self.hld, dtype=input.dtype)
+           
+        with device:
+            coord = backend.to_device(self.coord, device)
+            for nncoil in range(input.shape[1]):  
+                holder2[:,nncoil,...] = interp.interpolate(
+                input[:,nncoil,...],
+                coord,
+                kernel=self.kernel,
+                width=self.width,
+                param=self.param,
+            )
+                             
+            return holder2   
+
+
+
+    def _adjoint_linop(self):
+        return Gridding_MC_2(
+            self.ishape,
+            self.coord,
+            kernel=self.kernel,
+            width=self.width,
+            param=self.param,
+        )
+
+
+
+
+class Gridding_MC_2(Linop):
+    """Gridding linear operator.
+
+    Args:
+        oshape (tuple of ints): Output shape = batch_shape + pts_shape
+        ishape (tuple of ints): Input shape = batch_shape + grd_shape
+        coord (array): Coordinates, values from - nx / 2 to nx / 2 - 1.
+                ndim can only be 1, 2 or 3. of shape pts_shape + [ndim]
+        width (float): Width of interp. kernel in grid size.
+        kernel (str): Interpolation kernel, {'spline', 'kaiser_bessel'}.
+        param (float): Kernel parameter.
+
+    See Also:
+        :func:`sigpy.gridding`
+
+    """
+
+
+    def __init__(self, oshape, coord, kernel="spline", width=2, param=1):
+        ndim = coord.shape[-1]
+        ishape = list(oshape[:-ndim]) + list(coord.shape[:-1])
+        self.hld = oshape
+        self.coord = coord
+        self.kernel = kernel
+        self.width = width
+        self.param = param
+        self.mod_oshape = (oshape[0],oshape[2],oshape[3])
+
+        super().__init__(oshape, ishape)
+
+
+    def _apply(self, input):
+        device = backend.get_device(input)
+        holder = np.empty(self.hld, dtype=input.dtype)
+        with device:
+            coord = backend.to_device(self.coord, device)
+            
+            for nncoil in range(input.shape[1]): 
+                holder[:,nncoil,...] = interp.gridding(
+                input[:,nncoil,...],
+                coord,
+                self.mod_oshape,
+                kernel=self.kernel,
+                width=self.width,
+                param=self.param,
+            )
+            holder = np.fft.ifftshift(holder,axes = (2,3))
+            return holder
+
+    def _adjoint_linop(self):
+        return Interpolate_MC_2(
+            self.oshape,
+            self.coord,
+            kernel=self.kernel,
+            width=self.width,
+            param=self.param,
+        )
